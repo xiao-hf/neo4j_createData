@@ -1,0 +1,9 @@
+spring:
+  application:
+    name: neo4j_326
+server:
+  port: 8080
+neo4j:
+  uri: neo4j://localhost
+  username: neo4j
+  password: neo4jneo4j
