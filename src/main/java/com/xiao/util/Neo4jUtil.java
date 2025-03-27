@@ -8,6 +8,7 @@ import org.neo4j.driver.Record;
 import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Autowired;
 
+import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.List;
@@ -241,5 +242,239 @@ public class Neo4jUtil {
             list.add(value.asMap());
         }
         return list;
+    }
+
+
+
+
+
+    /**
+     * 通用创建节点方法，使用反射获取实体类信息
+     * @param entity 实体对象
+     * @param <T> 实体类型
+     * @return 创建的节点ID
+     */
+    public <T> Long createNode(T entity) {
+        if (entity == null) {
+            throw new IllegalArgumentException("实体对象不能为空");
+        }
+
+        try {
+            // 获取实体类名作为标签名
+            String label = entity.getClass().getSimpleName();
+
+            // 使用反射获取所有字段
+            Field[] fields = entity.getClass().getDeclaredFields();
+
+            // 准备参数和Cypher查询的属性部分
+            Map<String, Object> parameters = new HashMap<>();
+            StringBuilder propertyPairs = new StringBuilder();
+
+            for (int i = 0; i < fields.length; i++) {
+                Field field = fields[i];
+                field.setAccessible(true);
+
+                String propertyName = field.getName();
+                Object propertyValue = field.get(entity);
+
+                // 跳过null值
+                if (propertyValue != null) {
+                    // 添加属性名和参数占位符到Cypher
+                    if (propertyPairs.length() > 0) {
+                        propertyPairs.append(", ");
+                    }
+                    propertyPairs.append(propertyName).append(": $").append(propertyName);
+
+                    // 添加参数
+                    parameters.put(propertyName, propertyValue);
+                }
+            }
+
+            // 构建Cypher查询
+            String query = "CREATE (n:" + label + " {" + propertyPairs.toString() + "}) RETURN id(n) as nodeId";
+
+            // 执行查询
+            Result result = session.run(query, parameters);
+            return result.single().get("nodeId").asLong();
+
+        } catch (IllegalAccessException e) {
+            throw new RuntimeException("反射获取实体属性失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 批量创建节点
+     * @param entities 实体对象列表
+     * @param <T> 实体类型
+     */
+    public <T> void batchCreateNodes(List<T> entities) {
+        if (entities == null || entities.isEmpty()) {
+            return;
+        }
+
+        // 获取第一个实体确定类名
+        T firstEntity = entities.get(0);
+        String label = firstEntity.getClass().getSimpleName();
+
+        // 准备批处理
+        for (T entity : entities) {
+            try {
+                // 使用反射获取所有字段
+                Field[] fields = entity.getClass().getDeclaredFields();
+
+                // 准备参数和Cypher查询的属性部分
+                Map<String, Object> parameters = new HashMap<>();
+                StringBuilder propertyPairs = new StringBuilder();
+
+                for (int i = 0; i < fields.length; i++) {
+                    Field field = fields[i];
+                    field.setAccessible(true);
+
+                    String propertyName = field.getName();
+                    Object propertyValue = field.get(entity);
+
+                    // 跳过null值
+                    if (propertyValue != null) {
+                        // 添加属性名和参数占位符到Cypher
+                        if (propertyPairs.length() > 0) {
+                            propertyPairs.append(", ");
+                        }
+                        propertyPairs.append(propertyName).append(": $").append(propertyName);
+
+                        // 添加参数
+                        parameters.put(propertyName, propertyValue);
+                    }
+                }
+
+                // 构建Cypher查询
+                String query = "CREATE (n:" + label + " {" + propertyPairs.toString() + "})";
+
+                // 执行查询
+                session.run(query, parameters);
+
+            } catch (IllegalAccessException e) {
+                throw new RuntimeException("反射获取实体属性失败: " + e.getMessage(), e);
+            }
+        }
+    }
+
+    /**
+     * 通用创建关系方法
+     * @param sourceEntity 源实体
+     * @param targetEntity 目标实体
+     * @param relationshipType 关系类型
+     * @param sourceIdentifier 源实体标识字段名
+     * @param targetIdentifier 目标实体标识字段名
+     * @param <S> 源实体类型
+     * @param <T> 目标实体类型
+     */
+    public <S, T> void createRelationship(S sourceEntity, T targetEntity, String relationshipType,
+                                          String sourceIdentifier, String targetIdentifier) {
+        if (sourceEntity == null || targetEntity == null) {
+            throw new IllegalArgumentException("源实体或目标实体不能为空");
+        }
+
+        try {
+            // 获取实体类名作为标签名
+            String sourceLabel = sourceEntity.getClass().getSimpleName();
+            String targetLabel = targetEntity.getClass().getSimpleName();
+
+            // 获取标识字段值
+            Field sourceField = sourceEntity.getClass().getDeclaredField(sourceIdentifier);
+            sourceField.setAccessible(true);
+            Object sourceValue = sourceField.get(sourceEntity);
+
+            Field targetField = targetEntity.getClass().getDeclaredField(targetIdentifier);
+            targetField.setAccessible(true);
+            Object targetValue = targetField.get(targetEntity);
+
+            // 准备参数
+            Map<String, Object> parameters = new HashMap<>();
+            parameters.put("sourceValue", sourceValue);
+            parameters.put("targetValue", targetValue);
+
+            // 构建Cypher查询
+            String query = "MATCH (source:" + sourceLabel + "), (target:" + targetLabel + ") " +
+                    "WHERE source." + sourceIdentifier + " = $sourceValue AND target." + targetIdentifier + " = $targetValue " +
+                    "CREATE (source)-[:" + relationshipType + "]->(target)";
+
+            // 执行查询
+            session.run(query, parameters);
+
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw new RuntimeException("反射获取实体属性失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 创建精确匹配关系
+     * @param sourceEntity 源实体
+     * @param targetEntity 目标实体
+     * @param relationshipType 关系类型
+     * @param <S> 源实体类型
+     * @param <T> 目标实体类型
+     */
+    public <S, T> void createExactRelationship(S sourceEntity, T targetEntity, String relationshipType) {
+        if (sourceEntity == null || targetEntity == null) {
+            throw new IllegalArgumentException("源实体或目标实体不能为空");
+        }
+
+        try {
+            // 获取实体类名作为标签名
+            String sourceLabel = sourceEntity.getClass().getSimpleName();
+            String targetLabel = targetEntity.getClass().getSimpleName();
+
+            // 源实体匹配条件
+            Map<String, Object> parameters = new HashMap<>();
+            StringBuilder sourceCondition = new StringBuilder();
+            Field[] sourceFields = sourceEntity.getClass().getDeclaredFields();
+
+            for (int i = 0; i < sourceFields.length; i++) {
+                Field field = sourceFields[i];
+                field.setAccessible(true);
+
+                String propertyName = field.getName();
+                Object propertyValue = field.get(sourceEntity);
+
+                if (propertyValue != null) {
+                    if (sourceCondition.length() > 0) {
+                        sourceCondition.append(" AND ");
+                    }
+                    sourceCondition.append("source.").append(propertyName).append(" = $source_").append(propertyName);
+                    parameters.put("source_" + propertyName, propertyValue);
+                }
+            }
+
+            // 目标实体匹配条件
+            StringBuilder targetCondition = new StringBuilder();
+            Field[] targetFields = targetEntity.getClass().getDeclaredFields();
+
+            for (int i = 0; i < targetFields.length; i++) {
+                Field field = targetFields[i];
+                field.setAccessible(true);
+
+                String propertyName = field.getName();
+                Object propertyValue = field.get(targetEntity);
+
+                if (propertyValue != null) {
+                    if (targetCondition.length() > 0) {
+                        targetCondition.append(" AND ");
+                    }
+                    targetCondition.append("target.").append(propertyName).append(" = $target_").append(propertyName);
+                    parameters.put("target_" + propertyName, propertyValue);
+                }
+            }
+
+            // 构建Cypher查询
+            String query = "MATCH (source:" + sourceLabel + "), (target:" + targetLabel + ") " +
+                    "WHERE " + sourceCondition.toString() + " AND " + targetCondition.toString() + " " +
+                    "CREATE (source)-[:" + relationshipType + "]->(target)";
+
+            // 执行查询
+            session.run(query, parameters);
+
+        } catch (IllegalAccessException e) {
+            throw new RuntimeException("反射获取实体属性失败: " + e.getMessage(), e);
+        }
     }
 } 
